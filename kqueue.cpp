@@ -152,7 +152,7 @@ void Kqueue::unregister_signal (signalD_t ident)
 
     changeList[indexMap[ident]].flags = EV_DELETE;
     ::kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-    
+
     std::swap(changeList[indexMap[ident]], changeList.back());
     changeList.pop_back();
     indexMap.erase(ident);
@@ -235,17 +235,6 @@ void Kqueue::remove_timer (timerD_t ident)
     std::swap(changeList[indexMap[ident]], changeList.back());
     changeList.pop_back();
     indexMap.erase(ident);
-}
-
-void Kqueue::delete_timer (timerD_t ident)
-{
-    if(indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error ("timer is not found in the change list");
-    
-    changeList[indexMap[ident]].flags = EV_DELETE;
-    ::kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-    remove_timer(ident);
-    
 }
 
 void Kqueue::timer_helper (const timerD_t& ident, const int& time, unsigned short flags, unsigned int fflag, const Udata& data)
