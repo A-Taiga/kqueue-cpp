@@ -1,5 +1,5 @@
-main.cpp
 .vscode
-main
-.clangd
 .DS_Store
+compile_commands.json
+obj
+kqueue
