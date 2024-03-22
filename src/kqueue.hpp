@@ -1,4 +1,3 @@
-
 #ifndef KQUEUE_HPP
 #define KQUEUE_HPP
 
@@ -9,8 +8,6 @@
 #include <source_location>
 
 #define MAX_EVENTS 10000
-
-
 
 enum class Type: short
 {
@@ -25,6 +22,24 @@ enum class Timer_N: unsigned int
 {
     ABSOLUTE = NOTE_ABSOLUTE,
     NONE,
+};
+
+enum class EVFILT: short
+{
+    READ        = EVFILT_READ,
+    WRITE       = EVFILT_WRITE,
+    AIO         = EVFILT_AIO,
+    VNODE       = EVFILT_VNODE,
+    PROC        = EVFILT_PROC,
+    SIGNAL      = EVFILT_SIGNAL,
+    TIMER       = EVFILT_TIMER,
+    FS          = EVFILT_FS,
+    NONE,
+    #if defined(__APPLE__)
+        MACHPORT    = EVFILT_MACHPORT,
+        VM          = EVFILT_VM,
+        EXCEPT      = EVFILT_EXCEPT,
+    #endif
 };
 
 struct genericDescriptor
@@ -71,33 +86,24 @@ struct timerD_t : genericDescriptor
     timerD_t (int value);
 };
 
-enum class EVFILT: short
+struct Generic_Udata
 {
-    READ        = EVFILT_READ,
-    WRITE       = EVFILT_WRITE,
-    AIO         = EVFILT_AIO,
-    VNODE       = EVFILT_VNODE,
-    PROC        = EVFILT_PROC,
-    SIGNAL      = EVFILT_SIGNAL,
-    TIMER       = EVFILT_TIMER,
-    FS          = EVFILT_FS,
-    NONE,
-    #if defined(__APPLE__)
-        MACHPORT    = EVFILT_MACHPORT,
-        VM          = EVFILT_VM,
-        EXCEPT      = EVFILT_EXCEPT,
-    #endif
+    const std::function<void(struct kevent*)>& callback;
+    Generic_Udata (const std::function<void(struct kevent*)>& _callback, Type _type = Type::UNKNOWN);
+    Type get_type();
+    private:
+        Type type;
 };
 
-struct Udata
-{
-    std::function<void(struct kevent*)> callback;
-    Type type;
-};
+struct kEvent_data : Generic_Udata { kEvent_data (const std::function<void(struct kevent*)>& _callback); };
+struct user_data : Generic_Udata { user_data (const std::function<void(struct kevent*)>& _callback); };
+struct signal_data : Generic_Udata { signal_data (const std::function<void(struct kevent*)>& _callback); };
+struct timer_data : Generic_Udata { timer_data (const std::function<void(struct kevent*)>& _callback); };
 
 class Kqueue
 {
     private:
+        using callback_t = std::function<void(struct kevent*)>;
         int kq;
         timespec timeout;
         std::vector<struct kevent> changeList;
@@ -107,36 +113,35 @@ class Kqueue
     public:
         Kqueue (timespec _timeout);
         ~Kqueue ();
-        void register_kEvent (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags, Udata& data);
+        void register_kEvent (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags, const kEvent_data& data);
         void unregister_kEvent (fileD_t ident);
-        void update_kEvent  (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags, Udata& data);
+        void update_kEvent  (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags, const kEvent_data& data);
         void update_kEvent (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags);
         
-        void register_uEvent (userD_t ident, unsigned short flags, unsigned int fflags, Udata& data);
+        void register_uEvent (userD_t ident, unsigned short flags, unsigned int fflags, const user_data& data);
         void unregister_uEvent (userD_t ident);
-        void update_uEvent(userD_t ident, unsigned short flags, unsigned int fflags, Udata& data);
+        void update_uEvent(userD_t ident, unsigned short flags, unsigned int fflags, const user_data& data);
         void update_uEvent (userD_t ident, unsigned short flags, unsigned int fflags);
 
-        void register_signal (signalD_t ident, unsigned short flags, unsigned int fflags, Udata& data);
+        void register_signal (signalD_t ident, unsigned short flags, unsigned int fflags, const signal_data& data);
         void unregister_signal (signalD_t ident);
-        void update_signal (signalD_t ident, unsigned short flags, unsigned int fflags, Udata& data);
+        void update_signal (signalD_t ident, unsigned short flags, unsigned int fflags, const signal_data& data);
         void update_signal (signalD_t ident, unsigned short flags, unsigned int fflags);
 
 /* todo */
 /*
     add timer coalescing
 */  
-        void register_timer_seconds (timerD_t ident, int time, Udata& data, bool once = false);
-        void register_timer_milliseconds (timerD_t ident, int time, Udata& data, bool once = false);
-        void register_timer_microseconds (timerD_t ident, int time, Udata& data, bool once = false);
-        void register_timer_nanoseconds (timerD_t ident, int time, Udata& data, bool once = false);
+        void register_timer_seconds (timerD_t ident, int time, const timer_data& data, bool once = false);
+        void register_timer_milliseconds (timerD_t ident, int time, const timer_data& data, bool once = false);
+        void register_timer_microseconds (timerD_t ident, int time, const timer_data& data, bool once = false);
+        void register_timer_nanoseconds (timerD_t ident, int time, const timer_data& data, bool once = false);
         #if defined(__MACH__) || defined(__APPLE__)
-        void register_timer_machtime (timerD_t ident, int time, Udata& data, bool once = false);
+        void register_timer_machtime (timerD_t ident, int time, const timer_data& data, bool once = false);
         #endif
         void remove_timer(timerD_t ident);
     private:
-        void timer_helper (const timerD_t& ident, const int& time, unsigned short flags, unsigned int fflag, const Udata& data);
-    
+        void timer_helper (const timerD_t& ident, const int& time, unsigned short flags, unsigned int fflag, const timer_data& data);
     public:
         void handle_events ();
 };
@@ -148,7 +153,6 @@ class Kqueue_Error : public std::exception
     public:
         Kqueue_Error (std::string msg, std::source_location location = std::source_location::current());
         Kqueue_Error (std::source_location location = std::source_location::current());
-
         virtual const char* what() const noexcept;
 };
 
