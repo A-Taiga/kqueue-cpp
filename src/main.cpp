@@ -1,31 +1,43 @@
+#include "kqTypes.hpp"
 #include "kqueue.hpp"
-#include <iostream>
+static KQ::Kqueue kq({5,0});
 
 
-static Kqueue kq({5, 0});
 
-static void user_event_callback(struct kevent* ev)
+
+static void t1(struct kevent64_s* ev)
 {
-	std::cout << "Hello world!" << std::endl;
+	static int i = 1;
+	printf("sec: %d\n", i++);
+	if (i > 5)
+		kq.remove_timer(ev->ident);
+
 }
 
-static const auto seconds = [i = 1](struct kevent* ev) mutable
+static void t2(struct kevent64_s* ev)
 {
-	printf("seconds: %d\n", i++);
+	static int i = 1;
+	printf("ms: %d\n", i++);
 	if (i > 10)
-	{
 		kq.remove_timer(ev->ident);
-		kq.register_uEvent(0, EV_ONESHOT, NOTE_TRIGGER, {user_event_callback});
-	}
-};
-
+}
 
 int main()
 {
-	kq.register_timer_seconds(0, 1, {seconds});
+
+	kq.add_clock_ms(0, 500, t2);
+	kq.add_clock_sec(1, 1, t1);
+
+
+
+
+
+
+
 	while (true)
 	{
-		kq.handle_events();
+		kq.poll<10000>();
 	}
+
 	return 0;
 }

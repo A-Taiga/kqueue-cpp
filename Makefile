@@ -20,5 +20,5 @@ $(EXENAME): $(OBJECTS)
 $(OBJDIR)main.o: main.cpp kqueue.hpp
 	$(CXX) -c $< -o $@
 
-$(OBJDIR)kqueue.o: kqueue.cpp kqueue.hpp
+$(OBJDIR)kqueue.o: kqueue.cpp kqueue.hpp kqTypes.hpp
 	$(CXX) -c $< -o $@

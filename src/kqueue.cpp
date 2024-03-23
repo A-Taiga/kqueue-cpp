@@ -1,351 +1,125 @@
 #include "kqueue.hpp"
-#include <_stdio.h>
-#include <cstdlib>
-#include <cstring>
-#include <sys/event.h>
-#include <unistd.h>
-#include <iostream>
+#include "kqTypes.hpp"
+#include <cstdint>
+#include <functional>
+#include <stdexcept>
 #include <format>
 
-
-genericDescriptor::genericDescriptor (Type _type): type(_type) {}
-genericDescriptor::genericDescriptor (int _value, Type _type): value(_value), type(_type){}
-genericDescriptor:: operator int () const {return value;}
-Type genericDescriptor::get_type () const {return type;}
-
-
-
-fileD_t::fileD_t () : genericDescriptor(Type::KERNEL){}
-fileD_t::fileD_t (int value) : genericDescriptor(value, Type::KERNEL){}
-
-
-userD_t::userD_t () : genericDescriptor(Type::USER){}
-userD_t::userD_t (int value) : genericDescriptor(value, Type::USER){}
-
-
-signalD_t::signalD_t () : genericDescriptor(Type::SIGNAL){}
-signalD_t::signalD_t (int value) : genericDescriptor(value, Type::SIGNAL){}
-
-timerD_t::timerD_t () : genericDescriptor(Type::TIMER){}
-timerD_t::timerD_t (int value) : genericDescriptor(value, Type::SIGNAL){}
-
-
-Generic_Udata::Generic_Udata (const std::function<void(struct kevent*)>& _callback, Type _type)
-: callback(_callback)
-, type(_type)
-{}
-
-Type Generic_Udata::get_type() {return type;}
-
-kEvent_data::kEvent_data (const std::function<void(struct kevent*)>& _callback)
-: Generic_Udata(_callback, Type::KERNEL)
-{}
-
-user_data::user_data (const std::function<void(struct kevent*)>& _callback)
-: Generic_Udata(_callback, Type::USER)
-{}
-
-
-signal_data::signal_data (const std::function<void(struct kevent*)>& _callback)
-: Generic_Udata(_callback, Type::SIGNAL)
-{}
-
-timer_data::timer_data (const std::function<void(struct kevent*)>& _callback)
-: Generic_Udata(_callback, Type::TIMER)
-{}
-
-
-
-Kqueue::Kqueue(timespec _timeout)
-: timeout(_timeout)
+namespace KQ
 {
-    kq = ::kqueue();
-    if (kq == -1)
-        throw std::runtime_error(std::strerror(errno));
-}
 
-Kqueue::~Kqueue()
-{
-    close(kq);
-}
-
-void Kqueue::register_kEvent (fileD_t ident , EVFILT filter, unsigned short flags, unsigned int fflags, const kEvent_data& data)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("fd is already in the kq change list");
-    
-    changeList.push_back({});
-    EV_SET( &changeList.back(), ident, static_cast<short> (filter), EV_ADD | flags, fflags, 0, (void*) &(data));
-    int ret = ::kevent(kq, &changeList.back(), 1, nullptr, 0, &timeout);
-    if (ret == -1)
-        throw Kqueue_Error(std::strerror(errno));
-
-    indexMap[ident] = changeList.size()-1;
-}
-
-void Kqueue::unregister_kEvent (fileD_t ident)
-{
-    if (indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error ("fd is not found in the change list");
-
-    changeList[indexMap[ident]].flags = EV_DELETE;
-    ::kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-
-    std::swap(changeList[indexMap[ident]], changeList.back());
-    changeList.pop_back();
-    indexMap.erase(ident);
-    close(ident);
-}
-
-void Kqueue::update_kEvent (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags, const kEvent_data& data)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("fd is not found in the change list");
-    
-    std::size_t index = indexMap[ident];
-    changeList[index].filter = static_cast<short> (filter);
-    changeList[index].flags = flags;
-    changeList[index].fflags = fflags;
-    changeList[index].udata = (void*) &data;
-    kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-}
-
-void Kqueue::update_kEvent (fileD_t ident, EVFILT filter, unsigned short flags, unsigned int fflags)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("fd is not found in the change list");
-    
-    std::size_t index = indexMap[ident];
-    changeList[index].filter = static_cast<short> (filter);
-    changeList[index].flags = flags;
-    changeList[index].fflags = fflags;
-    kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-}
-
-void Kqueue::register_uEvent (userD_t ident, unsigned short flags, unsigned int fflags, const user_data& data)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("ident is already in the kq change list");
-    changeList.push_back({});
-    EV_SET( &changeList.back(), ident, EVFILT_USER, EV_ADD | flags, fflags, 0, (void*) &data);
-    int ret = ::kevent(kq, &changeList.back(), 1, nullptr, 0, &timeout);
-    if (ret == -1)
-        throw Kqueue_Error();
-    
-    indexMap[ident] = changeList.size()-1;
-    // data.type = Type::USER;
-}
-
-void Kqueue::unregister_uEvent (userD_t ident)
-{
-    if (indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error("dent is not found in the change list");
-    
-    changeList[indexMap[ident]].flags = EV_DELETE;
-    ::kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-    
-    std::swap(changeList[indexMap[ident]], changeList.back());
-    changeList.pop_back();
-    indexMap.erase(ident);
-}
-
-void Kqueue::update_uEvent (userD_t ident, unsigned short flags, unsigned int fflags, const user_data& data)
-{
-    if (indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error("ident is not found in the change list");
-
-    std::size_t index = indexMap[ident];
-    changeList[index].flags = flags;
-    changeList[index].fflags = fflags;
-    changeList[index].udata = (void*) &data;
-    kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-}
-
-void Kqueue::update_uEvent (userD_t ident, unsigned short flags, unsigned int fflags)
-{
-    if (indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error("ident is not found in the change list");
-    
-    std::size_t index = indexMap[ident];
-    changeList[index].flags = flags;
-    changeList[index].fflags = fflags;
-    kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-}
-
-void Kqueue::register_signal (signalD_t ident, unsigned short flags, unsigned int fflags, const signal_data& data)
-{
-    if(indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("signal is already in the kq change list");
-    
-    changeList.push_back({});
-    EV_SET(&changeList.back(), ident, static_cast<short> (EVFILT::SIGNAL), EV_ADD | flags, fflags, 0, (void*) &(data));
-    int ret = ::kevent(kq, &changeList.back(), 1, nullptr, 0, &timeout);
-    if (ret == -1)
-        throw Kqueue_Error(std::strerror(errno));
-
-    indexMap[ident] = changeList.size()-1;
-}
+    genericID_t::genericID_t(u64_t ident, Type_ID t) : v(ident), type(t) {}
+    genericID_t::operator u64_t() const {return v;}
+    Type_ID genericID_t::get_type() const {return type;}
 
 
-void Kqueue::unregister_signal (signalD_t ident)
-{
-    if(indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error ("signal is not found in the change list");
+    fd_t::fd_t(u64_t ident) : genericID_t(ident, Type_ID::KERNEL){}
+    user_t::user_t(u64_t ident) : genericID_t(ident, Type_ID::KERNEL){}
+    signal_t::signal_t(u64_t ident) : genericID_t(ident, Type_ID::KERNEL){}
+    timer_t::timer_t(u64_t ident) : genericID_t(ident, Type_ID::KERNEL){}
 
-    changeList[indexMap[ident]].flags = EV_DELETE;
-    ::kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
 
-    std::swap(changeList[indexMap[ident]], changeList.back());
-    changeList.pop_back();
-    indexMap.erase(ident);
-}
-
-void Kqueue::update_signal (signalD_t ident, unsigned short flags, unsigned int fflags, const signal_data& data)
-{
-    if (indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error("signal is not found in the change list");
-
-    std::size_t index = indexMap[ident];
-    changeList[index].flags = flags;
-    changeList[index].fflags = fflags;
-    changeList[index].udata = (void*) &data;
-    kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-}
-
-void Kqueue::update_signal (signalD_t ident, unsigned short flags, unsigned int fflags)
-{
-    if (indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error("signal is not found in the change list");
-    
-    std::size_t index = indexMap[ident];
-    changeList[index].flags = flags;
-    changeList[index].fflags = fflags;
-    kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-}
-
-void Kqueue::register_timer_seconds (timerD_t ident, int time, const timer_data& data, bool once)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("timer is already in the kq change list");
-    timer_helper(ident, time, once ? EV_ONESHOT : 0, NOTE_SECONDS, data);
-}
-
-void Kqueue::register_timer_milliseconds (timerD_t ident, int time, const timer_data& data, bool once)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("timer is already in the kq change list");
-    timer_helper(ident, time, once ? EV_ONESHOT : 0, 0, data);
-}
-
-void Kqueue::register_timer_microseconds (timerD_t ident, int time, const timer_data& data, bool once)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("timer is already in the kq change list");
-    timer_helper(ident, time, once ? EV_ONESHOT : 0, NOTE_USECONDS, data);
-}
-
-void Kqueue::register_timer_nanoseconds (timerD_t ident, int time, const timer_data& data, bool once)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("timer is already in the kq change list");
-    timer_helper(ident, time, once ? EV_ONESHOT : 0, NOTE_NSECONDS, data);
-}
-
-#if defined(__MACH__) || defined(__APPLE__)
-void Kqueue::register_timer_machtime (timerD_t ident, int time, const timer_data& data, bool once)
-{
-    if (indexMap.find(ident) != indexMap.end())
-        throw Kqueue_Error("timer is already in the kq change list");
-    timer_helper(ident, time, once ? EV_ONESHOT : 0, NOTE_MACHTIME, data);
-}
-#endif
-
-void Kqueue::remove_timer (timerD_t ident)
-{
-    if(indexMap.find(ident) == indexMap.end())
-        throw Kqueue_Error ("timer is not found in the change list");
-    
-    changeList[indexMap[ident]].flags = EV_DELETE;
-    ::kevent(kq, &changeList[indexMap[ident]], 1, nullptr, 0, &timeout);
-    
-    std::swap(changeList[indexMap[ident]], changeList.back());
-    changeList.pop_back();
-    indexMap.erase(ident);
-}
-
-void Kqueue::timer_helper (const timerD_t& ident, const int& time, unsigned short flags, unsigned int fflag, const timer_data& data)
-{
-    changeList.push_back({});
-    EV_SET( &changeList.back(), ident, static_cast<short> (EVFILT::TIMER), EV_ADD | flags, fflag, time, (void*) &(data));
-    int ret = ::kevent(kq, &changeList.back(), 1, nullptr, 0, &timeout);
-    if (ret == -1)
-        throw Kqueue_Error(std::strerror(errno));
-    indexMap[ident] = changeList.size()-1;
-}
-
-void Kqueue::handle_events ()
-{
-    int nChanges;
-    struct kevent eventList[MAX_EVENTS];
-    nChanges = ::kevent(kq, NULL, 0, eventList, MAX_EVENTS, &timeout);
-    if (nChanges == -1)
-        throw Kqueue_Error();
-
-    for (int i = 0; i < nChanges; i++)
+    Kqueue::Kqueue (std::timespec timeout)
+    : kq (::kqueue())
+    , timeout (timeout)
     {
-        struct kevent* ev = &eventList[i];
-        // Udata* ud = (Udata*)ev->udata;
-        Generic_Udata* ud = (Generic_Udata*)ev->udata;
-        if (ev->flags & EV_ERROR)
-        {
-            std::cout << strerror(errno) << std::endl;
-            try
-            {
-                // remove_event(ev->ident, ud->type);
-            }
-            catch (Kqueue_Error& e)
-            {
-                std::cout << e.what() << std::endl;
-            }
-        }
-        else
-        {
-            ud->callback(ev);
+        if (kq == -1)
+            throw std::runtime_error(strerror(errno));
+    }
 
-        }
-        if (ev->flags & EV_ONESHOT)
+    bool Kqueue::add_clock_ms (timer_t id, i64_t time, const callable&& callback)
+    {
+        if (map.contains(id)) 
+            return false;
+        map[id] = {{},std::move(callback), Type_ID::TIMER};
+        add_helper(id, EVFILT_TIMER, EV_ADD, 0, time, reinterpret_cast<uintptr_t>(&map[id]));
+        return true;
+    }
+
+    bool Kqueue::add_clock_sec (timer_t id, i64_t time, const callable&& callback)
+    {
+        if (map.contains(id)) 
+            return false;
+        map[id] = {{},std::move(callback), Type_ID::TIMER};
+        add_helper(id, EVFILT_TIMER, EV_ADD, NOTE_SECONDS, time, reinterpret_cast<uintptr_t>(&map[id]));
+        return true;
+    }
+
+    bool  Kqueue::add_timer_sec (timer_t id, i64_t time, const callable&& callback)
+    {
+        if (map.contains(id))
+            return false;
+        map[id] = {{}, std::move(callback), Type_ID::TIMER};
+        add_helper(id, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_SECONDS, time, reinterpret_cast<uintptr_t>(&map[id]));
+        return true;
+    }
+
+    void Kqueue::remove_timer(timer_t id)
+    {
+        if (!map.contains(id))
+            throw Error("timer id not found");
+        
+        map[id].ev.flags = EV_DELETE;
+        int ret = ::kevent64(kq, &map[id].ev, 1, nullptr, 0, 0, &timeout);
+        if (ret == -1)
+            throw Error(std::strerror(errno));
+
+        map.erase(id);
+    }
+
+    void Kqueue::add_helper (const genericID_t& id, const i64_t& filter, const u16_t& flags, const u32_t& fflags, const i64_t& data, const u64_t& udata)
+    {
+        EV_SET64 (&map[id].ev, id, filter, flags, fflags, data, udata, 0, 0);
+        int ret = ::kevent64(kq, &map[id].ev, 1, nullptr, 0, 0, &timeout);
+        if (ret == -1)
+            throw Error(std::strerror(errno));
+    }
+
+
+    void Kqueue::poll_helper (kevent64_s* eventList, std::size_t size)
+    {
+        std::size_t Nchanges;
+        Nchanges = ::kevent64(kq, NULL, 0, eventList, size, 0,&timeout);
+        if (Nchanges == -1)
+            throw Error();
+
+        if (Nchanges == -1)
+            throw std::runtime_error(std::strerror(errno));
+        for (std::size_t i = 0; i < Nchanges; i++)
         {
-            try
+            struct kevent64_s* ev = &eventList[i];
+            struct data* data = reinterpret_cast<struct data*>(ev->udata);
+
+            if (ev->flags & EV_ERROR)
             {
-                remove_event(ev->ident, ud->get_type());
-            } 
-            catch (Kqueue_Error& e)
+                Error("EV_ERROR");
+            }
+
+            data->callback(ev);
+
+            if (ev->flags & EV_ONESHOT)
             {
-                std::cout << e.what() << std::endl;
+                switch (data->type)
+                {
+                    case Type_ID::KERNEL:   map.erase(fd_t(ev->ident)); break;
+                    case Type_ID::USER:     map.erase(user_t(ev->ident)); break;
+                    case Type_ID::SIGNAL:   map.erase(signal_t(ev->ident)); break;
+                    case Type_ID::TIMER:    map.erase(timer_t(ev->ident)); break;
+                }
             }
         }
     }
-}
 
-void Kqueue::remove_event(int ident, Type type)
-{
-    switch (type)
+
+    Error::Error (std::string msg, std::source_location location)
+    : message(std::format("{}:{} {}", location.file_name(), location.line(), msg))
+    {}
+    Error::Error (std::source_location location)
+    : message(std::format("{}:{}", location.file_name(), location.line()))
+    {}
+    const char* Error::what() const noexcept
     {
-        case Type::KERNEL:  unregister_kEvent(ident); break;
-        case Type::USER:    unregister_uEvent(ident); break;
-        case Type::SIGNAL:  unregister_signal(ident); break;
-        case Type::TIMER:   remove_timer(ident); break;
-        case Type::UNKNOWN: throw Kqueue_Error("Type is unknown");
+        return message.c_str();
     }
-}
 
-Kqueue_Error::Kqueue_Error (std::string msg, std::source_location location)
-: message(std::format("{}:{} {}", location.file_name(), location.line(), msg))
-{}
-Kqueue_Error::Kqueue_Error (std::source_location location)
-: message(std::format("{}:{}", location.file_name(), location.line()))
-{}
-const char* Kqueue_Error::what() const noexcept
-{
-    return message.c_str();
 }
